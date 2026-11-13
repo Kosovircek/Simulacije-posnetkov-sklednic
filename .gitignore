@@ -1,0 +1,18 @@
+# videi so preveliki za GitHub (ostanejo lokalno)
+*.mp4
+animations/*/scene.blend
+animations/*/frames/
+animations/*/tmp/
+
+# Blender varnostne kopije
+*.blend1
+*.blend2
+
+# generirani dataseti
+dataset/
+test_out/
+anim_test/
+anim_preview/
+
+__pycache__/
+*.pyc
