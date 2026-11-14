@@ -55,13 +55,17 @@ Primeri: [`primeri/slike`](primeri/slike).
 blender -b turtle_meadow.blend -P turtle_dataset.py -- --animate --seed 1 --out animations
 ```
 
-- Ena naključna scena za cel posnetek. Želva začne v mlaki, priplava na obalo in pol-naključno
-  (vijuganje, spreminjanje hitrosti, postanki) odide čez travnik do 3,5–6,5 m pred kamero.
+- Vsak video ima svoje naključno okolje (trava, gole krpe, sonce, nebo, rekviziti …).
+- Želva vedno začne v mlaki na naključnem delu vidne obale, priplava ven in gre po naključni poti
+  (0–2 vmesni točki, vijuganje, spreminjanje hitrosti, postanki) na naključno mesto na travniku 3,5–22 m od kamere.
 - Realna hitrost ~0,08–0,18 m/s (vsakič drugačna) → posnetek je dolg 3–8 minut.
 - V termalni sliki pride iz vode hladnejša in se na soncu postopno segreva.
 - Izhod v `animations/anim_0001/`: `rgb.mp4`, `thermal.mp4`, `combined.mp4`,
   `track.csv` (položaj, hitrost, stanje, bbox in temperatura želve za vsako sličico), `info.json`,
-  `scene.blend` (animirana scena za ogled v Blenderju).
+  `pot.png` (okolje z vrisano potjo), `scene.blend` (animirana scena za ogled v Blenderju)
+  in `frames/` s posameznimi sličicami (`rgb/`, `thermal/`, `mask/`, `combined/`, `labels/` YOLO).
+- Med renderjem terminal za vsako sličico izpiše, koliko časa je porabil render termalne in RGB slike,
+  zapis datotek, skupaj in oceno do konca.
 
 Možnosti:
 
@@ -70,7 +74,7 @@ Možnosti:
 | `--fps 10` | sličice na sekundo (privzeto 10) |
 | `--low` | nizka kvaliteta za hiter test (RGB 640×512, manj vzorcev) |
 | `--stop-dist 5` | kako daleč od kamere (m) se želva ustavi |
-| `--keep-frames` | obdrži posamezne sličice + YOLO oznake za vsako sličico |
+| `--no-frames` | ne shrani posameznih sličic (privzeto se shranijo poleg videa) |
 | `--preview 10` | simulira celo pot, zrenderira samo 10 sličic (brez videa) – za hiter pregled poti |
 
 Primer predogleda poti: [`primeri/pot_zelve`](primeri/pot_zelve).

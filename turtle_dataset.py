@@ -12,10 +12,11 @@ Blender 4.2+ / 5.0.  Uporaba (iz ukazne vrstice):
 
      Dodatno:  --seed 7   --start 1000 (nadaljuj stevilcenje)   --cycles
 
-  3) Animacija (ena scena, zelva gre od mlake cez travnik skoraj do kamere) -> mp4:
+  3) Animacija (vsak video svoje nakljucno okolje; zelva priplava iz mlake in gre po
+     nakljucni poti na nakljucno mesto na travniku pred kamero) -> mp4:
      blender -b turtle_meadow.blend -P turtle_dataset.py -- --animate --seed 3 --out animations
 
-     Dodatno:  --fps 10   --stop-dist 5 (m od kamere, kjer se ustavi)   --keep-frames (obdrzi slicice + YOLO oznake)
+     Dodatno:  --fps 10   --stop-dist 5 (m od kamere, kjer se ustavi; sicer nakljucno 3.5-22 m)   --no-frames (ne shrani posameznih slicic, samo video)
      Hitro: ozadje se zrenderira enkrat, nato vsako slicico samo izsek okoli zelve in sence.
 
      Predogled poti (cela pot se simulira, zrenderira se samo 10 slicic, brez videa):
@@ -1236,9 +1237,28 @@ def set_mode(scene, mode, P, T):
         scene.render.image_settings.color_mode = 'BW'; scene.render.image_settings.color_depth = '8'
 
 
+class _quiet:
+    """Utisa Blenderjev izpis (Fra:/Saved:/Video append ...) med renderjem, da je terminal pregleden."""
+    def __enter__(self):
+        sys.stdout.flush()
+        try:
+            self.fd = os.dup(1)
+            self.null = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(self.null, 1)
+        except OSError:
+            self.fd = None
+        return self
+
+    def __exit__(self, *a):
+        if self.fd is not None:
+            sys.stdout.flush()
+            os.dup2(self.fd, 1); os.close(self.fd); os.close(self.null)
+
+
 def render_to(scene, path):
     scene.render.filepath = path
-    bpy.ops.render.render(write_still=True)
+    with _quiet():
+        bpy.ops.render.render(write_still=True)
 
 
 def load_gray(path):
@@ -1381,7 +1401,9 @@ def thermal_post(a, rng):
 
 # ---------------------------------------------------------------- ANIMACIJA: zelva pride iz mlake
 ANIM_FPS = 10                   # termo kamere pogosto snemajo ~9 Hz
-ANIM_STOP_DIST = (3.5, 6.5)     # m, kako dalec od kamere se zelva ustavi
+ANIM_STOP_DIST = (3.5, 22.0)    # m, kako dalec od kamere se zelva ustavi (nakljucno mesto na travniku)
+ANIM_MIN_WALK = 5.0             # m, najmanj od obale do cilja
+ANIM_WAYPOINTS = (0, 2)         # nakljucne vmesne tocke poti
 ANIM_SPEED = (0.08, 0.18)       # m/s osnovna hitrost hoje (vsak posnetek drugacna)
 ANIM_SWIM_SPEED = (0.08, 0.2)   # m/s plavanje do obale
 ANIM_PAUSE_RATE = 0.02          # verjetnost postanka na sekundo hoje
@@ -1412,35 +1434,75 @@ def in_view(cam, scene, p3, margin=0.02):
     return q.z > 0 and margin < q.x < 1 - margin and margin < q.y < 1 - margin
 
 
-def plan_walk(r, cam, scene, stop_dist=None):
-    """Zacetek v mlaki (P0), izhod na obalo (S), cilj (T) blizu kamere na sredini travnika - vse v kadru."""
+def visible_shore_points(cam, scene, step_deg=2.0):
+    """Vse tocke obale mlake, ki so v kadru in obrnjene proti kameri (zelva od tam ne hodi cez vodo)."""
     co = cam.matrix_world.translation
-    to_cam = math.atan2(co.y - POND['cy'], co.x - POND['cx'])
-    for _ in range(300):
-        S, out_dir = find_shore(to_cam + U(r, -0.7, 0.7))
+    pts = []
+    for k in range(int(360 / step_deg)):
+        S, out_dir = find_shore(math.radians(k * step_deg))
         if S is None:
             continue
+        to_cam = (co.xy - S).normalized()
+        if out_dir.dot(to_cam) < 0.15:
+            continue
+        if not in_view(cam, scene, Vector((S.x, S.y, terrain_height(S.x, S.y))), 0.03):
+            continue
+        pts.append((S, out_dir))
+    return pts
+
+
+def _crosses_pond(a, b, n=12):
+    return any(in_pond(*(a + (b - a) * (k / n))) for k in range(1, n))
+
+
+def plan_walk(r, cam, scene, stop_dist=None):
+    """Zacetek v mlaki (P0) na nakljucnem delu vidne obale, izhod na obalo (S),
+    nakljucen cilj (T) na travniku v kadru in 0-2 nakljucni vmesni tocki."""
+    co = cam.matrix_world.translation
+    shore = visible_shore_points(cam, scene)
+    if not shore:
+        raise RuntimeError('Obala mlake ni v kadru')
+    lo, hi = (stop_dist - 0.5, stop_dist + 0.5) if stop_dist else ANIM_STOP_DIST
+    for _ in range(300):
+        S, out_dir = r.choice(shore)
         P0 = S - out_dir * U(r, 0.6, 1.5)          # zacne v vodi, priplava do obale
         if not in_pond(P0.x, P0.y) or not in_view(cam, scene, Vector((P0.x, P0.y, WATER_LEVEL)), 0.03):
             continue
         for _ in range(500):
-            hit = ground_hit(cam, scene, U(r, 0.2, 0.8), U(r, 0.05, 0.35))
+            hit = ground_hit(cam, scene, U(r, 0.06, 0.94), U(r, 0.04, 0.8))
             if hit is None:
                 continue
-            d = (hit.xy - co.xy).length
-            lo, hi = (stop_dist - 0.4, stop_dist + 0.4) if stop_dist else ANIM_STOP_DIST
-            if lo <= d <= hi and not in_pond(hit.x, hit.y):
-                return P0, S, hit.xy
-    raise RuntimeError('Ni bilo mogoce najti poti zelve od mlake do kamere')
+            T = hit.xy
+            if not lo <= (T - co.xy).length <= hi or in_pond(T.x, T.y) or (T - S).length < ANIM_MIN_WALK:
+                continue
+            if _crosses_pond(S + out_dir * 0.5, T):
+                continue
+            # vmesne tocke: ob ravni crti S->T, nakljucno odmaknjene vstran
+            wps, prev, ok = [], S, True
+            n = r.randint(*ANIM_WAYPOINTS)
+            fr = sorted(U(r, 0.2, 0.8) for _ in range(n))
+            D = T - S
+            side = Vector((-D.y, D.x)).normalized()
+            for f in fr:
+                w = S + D * f + side * U(r, -0.35, 0.35) * D.length
+                if in_pond(w.x, w.y) or _crosses_pond(prev, w) or \
+                        not in_view(cam, scene, Vector((w.x, w.y, terrain_height(w.x, w.y))), 0.03):
+                    ok = False; break
+                wps.append(w); prev = w
+            if not ok or _crosses_pond(prev, T):
+                continue
+            return P0, S, T, wps
+    raise RuntimeError('Ni bilo mogoce najti poti zelve od mlake na travnik')
 
 
-def simulate_walk(r, P0, S, T, fps, L):
+def simulate_walk(r, P0, S, T, fps, L, waypoints=()):
     """Semi-nakljucna hoja: plavanje do obale, nato hoja proti cilju z 'blodenjem', postanki, spreminjanjem hitrosti."""
     s = L / 0.2
     dt = 1.0 / fps
     v0, vs = U(r, *ANIM_SPEED), U(r, *ANIM_SWIM_SPEED)
-    wander_amp, wander_f, nseed = U(r, 0.3, 1.0), U(r, 0.05, 0.25), U(r, 0, 1000)
+    wander_amp, wander_f, nseed = U(r, 0.2, 1.2), U(r, 0.04, 0.3), U(r, 0, 1000)
     turn_rate = U(r, 0.5, 1.2)
+    wps = list(waypoints)
     p = P0.copy()
     first = S if (S - P0).length > 0.01 else T
     heading = math.atan2(first.y - P0.y, first.x - P0.x)
@@ -1455,7 +1517,7 @@ def simulate_walk(r, P0, S, T, fps, L):
             state = 'stop'; hold -= dt
             if hold <= 0:
                 break
-        elif not in_water and dist_T < 0.08:
+        elif not in_water and not wps and dist_T < 0.08:
             state = 'stop'; hold = U(r, *ANIM_END_HOLD)
         elif pause > 0:
             state = 'pause'; pause -= dt
@@ -1463,10 +1525,12 @@ def simulate_walk(r, P0, S, T, fps, L):
             state = 'swim' if in_water else 'walk'
             if not in_water and r.random() < ANIM_PAUSE_RATE * dt:
                 pause = U(r, *ANIM_PAUSE)
-            target = S if in_water else T
+            if not in_water and wps and (wps[0] - p).length < 0.4:
+                wps.pop(0)                    # vmesna tocka dosezena -> naslednja
+            target = S if in_water else (wps[0] if wps else T)
             want = math.atan2(target.y - p.y, target.x - p.x)
             if not in_water:
-                want += wander_amp * noise.noise(Vector((t * wander_f, nseed, 0.0))) * min(1.0, dist_T / 1.5)
+                want += wander_amp * noise.noise(Vector((t * wander_f, nseed, 0.0))) * min(1.0, (target - p).length / 1.5)
             dh = (want - heading + math.pi) % (2 * math.pi) - math.pi
             heading += max(-turn_rate * dt, min(turn_rate * dt, dh))
             if in_water:
@@ -1475,7 +1539,7 @@ def simulate_walk(r, P0, S, T, fps, L):
                 v = v0 * (0.75 + 0.4 * noise.noise(Vector((t * 0.3, nseed + 5.0, 0.0))))
                 ahead = terrain_height(p.x + 0.1 * math.cos(heading), p.y + 0.1 * math.sin(heading))
                 v *= clamp(1.0 - 1.2 * max((ahead - h) / 0.1, 0.0), 0.55, 1.0)   # v breg pocasneje
-                v = min(v, dist_T * 0.6 + 0.01)
+                v = min(v, dist_T * 0.6 + 0.01) if not wps else v
             p = p + Vector((math.cos(heading), math.sin(heading))) * v * dt
             phase += v * dt / (0.07 * s) * 2 * math.pi
         if not in_water and land_t is None:
@@ -1533,7 +1597,8 @@ def encode_video(frame_dir, out_path, fps):
     sc.render.use_sequencer = True
     sc.render.filepath = out_path
     with bpy.context.temp_override(scene=sc):
-        bpy.ops.render.render(animation=True, scene=sc.name)
+        with _quiet():
+            bpy.ops.render.render(animation=True, scene=sc.name)
     bpy.data.scenes.remove(sc)
 
 
@@ -1727,7 +1792,7 @@ def set_turtle_hidden(root, parts, hidden):
         ob.hide_render = hidden
 
 
-def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=False, use_cycles=False, preview=0):
+def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=True, use_cycles=False, preview=0):
     """preview=N: simulira celo pot, zrenderira pa samo N enakomerno razporejenih slicic (brez videa)."""
     import shutil
     scene = bpy.data.scenes['TurtleMeadow']
@@ -1749,8 +1814,8 @@ def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=Fals
     caminfo = place_camera_fixed(scene, cam)
     L = U(r, *TURTLE_LEN); s = L / 0.2
     pose_turtle(parts, r)   # nakljucna barva/oblika ostane, poza se animira
-    P0, S, T = plan_walk(r, cam, scene, stop_dist)
-    frames = simulate_walk(r, P0, S, T, fps, L)
+    P0, S, T, wps = plan_walk(r, cam, scene, stop_dist)
+    frames = simulate_walk(r, P0, S, T, fps, L, wps)
     set_grass_params(r, cam, scene, dict(x=T.x, y=T.y, length_m=L))
     set_val('TR', 0.0)   # brez lukenj v travi (zelva se premika)
     placed = place_props(r, list(bpy.data.collections['TD_Props'].objects), cam, scene, (T.x, T.y))
@@ -1796,6 +1861,7 @@ def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=Fals
     # --- 1) staticno ozadje BREZ zelve: zrenderira se samo enkrat
     # termalna se renderira v RGB locljivosti (R = temperatura, B = maska) in se nato pomanjsa
     print('Renderiram ozadje (enkrat) ...', flush=True)
+    _tbg = time.time()
     TW, TH = THERMAL_RES
     def thermal_mode():
         set_mode(scene, 'thermal', P, Th)
@@ -1809,6 +1875,20 @@ def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=Fals
     render_to(scene, os.path.join(tmp, 'bg_thermal.png'))
     bg_th = load_float(os.path.join(tmp, 'bg_thermal.png'))
     bg_th[:, :, 2] = 0.0
+    print(f'  ozadje RGB + termalna: {time.time() - _tbg:.1f} s', flush=True)
+    # pregled: ozadje tega videa z vrisano celotno potjo zelve
+    pot = bg_rgb.copy()
+    def dot(p3, col, rad):
+        q = world_to_camera_view(scene, cam, p3)
+        x, y = int(q.x * W), int((1 - q.y) * H)
+        pot[max(y - rad, 0):y + rad + 1, max(x - rad, 0):x + rad + 1] = col
+    for f in frames[::max(1, fps)]:
+        dot(Vector((f['x'], f['y'], f['z'])), (230, 30, 30), 1)
+    for w in wps:
+        dot(Vector((w.x, w.y, terrain_height(w.x, w.y))), (250, 220, 0), 3)
+    dot(Vector((P0.x, P0.y, WATER_LEVEL)), (0, 220, 60), 4)
+    dot(Vector((T.x, T.y, terrain_height(T.x, T.y))), (255, 0, 0), 4)
+    write_png_rgb(os.path.join(adir, 'pot.png'), pot)
     set_turtle_hidden(root, parts, False)
 
     # --- 2) vsaka slicica: samo izsek okoli zelve (+ senca), prilepljen na ozadje
@@ -1824,6 +1904,8 @@ def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=Fals
     for i, fr in enumerate(frames):
         if sel is not None and i not in sel:
             continue
+        tf0 = time.time()
+        t_th = t_rgb = None
         scene.frame_set(i)
         if fr['in_water'] or fr['land_t'] is None:
             temp = T_water
@@ -1839,13 +1921,17 @@ def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=Fals
         else:
             if tkey != prev['tkey']:        # termalna (+ maska zelve v B kanalu)
                 thermal_mode()
+                _t = time.time()
                 pt = render_region(scene, os.path.join(tmp, 'reg_th.png'), box)
+                t_th = time.time() - _t
                 reg_th = load_float(os.path.join(tmp, 'reg_th.png'))
                 prev['tmask'] = reg_th[:, :, 2] > 0.02
                 prev['th'] = blend_region(bg_th, reg_th, pt, BLEND_THR_TH, prev['tmask'])
             if key != prev['key']:          # zelva se je premaknila -> RGB izsek
                 set_mode(scene, 'rgb', P, Th)
+                _t = time.time()
                 pr = render_region(scene, os.path.join(tmp, 'reg_rgb.png'), box)
+                t_rgb = time.time() - _t
                 prev['rgb'] = blend_region(bg_rgb, load_rgb(os.path.join(tmp, 'reg_rgb.png')), pr,
                                            BLEND_THR_RGB, prev['tmask'])
                 n_rendered += 1
@@ -1853,7 +1939,7 @@ def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=Fals
             comp_rgb, comp_th = prev['rgb'], prev['th']
         m = comp_th[:, :, 2] > 0.5
         th_small = downsample(comp_th[:, :, 0], TW, TH)
-        if keep_frames or preview:
+        if keep_frames:
             write_png_gray(os.path.join(fdir['mask'], fn), m.astype(np.uint8) * 255)
         if rgb_noise > 0:
             comp_rgb = np.clip(comp_rgb + rng.normal(0, rgb_noise, comp_rgb.shape[:2])[:, :, None]
@@ -1880,10 +1966,14 @@ def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=Fals
                      f'{temp:.2f}'])
         done += 1
         n_total = len(sel) if sel else len(frames)
-        if sel is not None or done % 20 == 0 or done == n_total:
-            el = time.time() - t0
-            print(f'  slicica {done}/{n_total} (f{i})  {fr["state"]}  {el / done:.2f} s/slicico  '
-                  f'ETA {el / done * (n_total - done) / 60:.1f} min', flush=True)
+        el = time.time() - t0
+        tf = time.time() - tf0
+        def fmt(x):
+            return f'{x:5.2f} s' if x is not None else ' ponovno'   # izsek ponovno uporabljen (zelva miruje)
+        bx = region_px(box, W, H) if box else None
+        print(f'  slicica {i:5d}  [{done}/{n_total}]  {fr["state"]:5s}  izsek {(bx[2] - bx[0]) if bx else 0:3d}x{(bx[3] - bx[1]) if bx else 0:<3d} px'
+              f' | render termalna {fmt(t_th)}  rgb {fmt(t_rgb)} | zapis {tf - (t_th or 0) - (t_rgb or 0):4.2f} s'
+              f' | skupaj {tf:4.2f} s | povp. {el / done:4.2f} s | ETA {el / done * (n_total - done) / 60:5.1f} min', flush=True)
     print(f'Izsekov zrenderiranih: {n_rendered} od {len(frames)} slicic', flush=True)
 
 
@@ -1894,7 +1984,7 @@ def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=Fals
         wr.writerows(rows)
     with open(os.path.join(adir, 'info.json'), 'w') as f:
         json.dump(dict(seed=seed, fps=fps, frames=len(frames), duration_s=len(frames) / fps, turtle_length_m=L,
-                       start_in_pond=list(P0), shore=list(S), end=list(T), camera=caminfo,
+                       start_in_pond=list(P0), shore=list(S), end=list(T), waypoints=[list(w) for w in wps], camera=caminfo,
                        rgb_res=list(RGB_RES), thermal_res=list(THERMAL_RES),
                        scene=dict(grass_height_m=P['grass_h'], overcast=P['overcast'], sun=P['sun'], props=placed),
                        thermal_celsius=Th), f, indent=1, default=lambda o: list(o) if hasattr(o, '__iter__') else str(o))
@@ -1904,11 +1994,15 @@ def render_animation(out, seed=0, fps=ANIM_FPS, stop_dist=None, keep_frames=Fals
         return
     print('Kodiram video ...', flush=True)
     for k in ('rgb', 'thermal', 'combined'):
+        _t = time.time()
         encode_video(fdir[k], os.path.join(adir, f'{k}.mp4'), fps)
+        print(f'  {k}.mp4  {time.time() - _t:.1f} s', flush=True)
     shutil.rmtree(os.path.join(adir, 'tmp'), ignore_errors=True)
     if not keep_frames:
         shutil.rmtree(os.path.join(adir, 'frames'), ignore_errors=True)
     print('Animacija shranjena:', adir, f'({len(frames)} slicic, {len(frames) / fps:.1f} s)')
+    if keep_frames:
+        print('Posamezne slicice:', os.path.join(adir, 'frames'), '(rgb, thermal, mask, combined, labels)')
 
 
 def set_grass_params(r, cam, scene, tinfo, dens=None):
@@ -2115,7 +2209,7 @@ def main():
         if 'TurtleMeadow' not in bpy.data.scenes:
             build_scene(seed=1)
         render_animation(arg('--out', 'animations'), seed=seed, fps=arg('--fps', ANIM_FPS, int),
-                         stop_dist=arg('--stop-dist', None, float), keep_frames=bool(arg('--keep-frames')),
+                         stop_dist=arg('--stop-dist', None, float), keep_frames=not arg('--no-frames'),
                          use_cycles=bool(arg('--cycles')), preview=arg('--preview', 0, int))
     if not argv and 'TurtleMeadow' in bpy.data.scenes:
         preview(random.randint(0, 10 ** 6))   # zagon iz Text Editorja: nov nakljucen primer
