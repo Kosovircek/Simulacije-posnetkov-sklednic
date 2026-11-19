@@ -16,3 +16,11 @@ anim_preview/
 
 __pycache__/
 *.pyc
+
+# surovi LiDAR (ARSO) - prenese se znova, glej README; v repo gre samo lidar/site_scene.npz
+lidar/*.laz
+lidar/*.asc
+lidar/site.npz
+rezultati/
+test_render/
+turtle_meadow_pred_zavihkom.blend

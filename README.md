@@ -8,16 +8,41 @@ kjer želva priplava iz mlake in gre čez travnik proti kameri.
 
 ## Scena
 
-- Travnik 100 × 50 m (**0,5 ha**), rahlo valovit teren, izhodišče (0, 0) je na sredini.
-- **Mlaka** ob vzhodnem robu (+X) s trstičjem in rogozom, blato ob obali.
-- **Drevesa** (listavci in iglavci) v pasovih ob robovih travnika.
+Scena je narejena po **pravem bajerju in travniku** (45.94005 N, 14.55201 E) iz odprtih LiDAR podatkov ARSO:
+
+![Scena od zgoraj](primeri/realna_lokacija/od_zgoraj.png)
+
+- **Teren**: digitalni model reliefa DMR 1 m (z blagim hribčkom in brežino ob kolovozu), okno 240 × 240 m.
+- **Mlaka** na zahodu: oblika iz LiDAR (voda ne vrne odboja + gladina), poglobljeno dno, **lokvanji**, trst ob obali.
+- **Drevesa** (~1900) na pravih mestih in v pravih višinah – vrhovi krošenj iz oblaka točk (GKOT), + grmovje.
+- **Travnik** samo tam, kjer ga pokaže LiDAR (v gozdu so tla z listjem in mahom).
+- **Kolovoz** z dvema kolesnicama po trasi s satelitskega posnetka.
+- **Fiksna kamera** na sredini travnika, 5 m nad tlemi, nagib 62°, gleda proti mlaki (24 mm).
+- **Trava** je večinoma proceduralna tekstura + redki 3D šopi blizu kamere.
 - **Želva**: 3D model, dolžina 15–25 cm, oklep s ščitki in rumenimi pikami, glava/noge iztegnjene ali skrite.
-- **Fiksna kamera** na sredini travnika, 5 m visoko, nagib 60°, gleda proti mlaki (24 mm).
-- **Trava** je večinoma proceduralna tekstura (bilke, suhe krpe, gola zemlja, cvetlice) + redki 3D šopi blizu kamere.
 - Motilci: kamni (na soncu topli – dobri lažni pozitivi), krtine, veje.
 
-Pri vsaki sliki/animaciji se naključno spremenijo: položaj in barva želve, barve trave, zemlje, vode in dreves,
-suhost, gole krpe, smer polegnjenosti trave, sonce/oblačnost, rekviziti in temperature v termalni sliki.
+Koordinate: (0, 0) = zgornja točka (D96/TM E=465263.6, N=89011.0), x proti vzhodu, y proti severu, metri.
+
+Pri vsaki sliki/animaciji se naključno spremenijo: položaj in barva želve, barve trave, zemlje, gozdnih tal,
+vode, lokvanjev in dreves, suhost, gole krpe, smer polegnjenosti trave, sonce/oblačnost, rekviziti in temperature.
+
+### LiDAR podatki
+
+V repozitoriju je že pripravljena `lidar/site_scene.npz`. Za ponovno izdelavo (npr. drugo lokacijo):
+
+```bash
+cd lidar
+curl -O http://gis.arso.gov.si/lidar/dmr1/b_35/D96TM/TM1_465_89.asc
+curl -O http://gis.arso.gov.si/lidar/dmr1/b_35/D96TM/TM1_465_88.asc
+curl -O http://gis.arso.gov.si/lidar/gkot/laz/b_35/D96TM/TM_465_89.laz
+curl -O http://gis.arso.gov.si/lidar/gkot/laz/b_35/D96TM/TM_465_88.laz
+pip install "laspy[lazrs]" numpy
+python process_lidar.py      # -> site.npz (teren, višina rastlinja, voda)
+python make_site.py          # -> site_scene.npz (mlaka, travnik, drevesa, grmi, kolovoz)
+```
+
+Nato znova zgradi sceno (`--build`, glej spodaj).
 
 ## Zahteve
 
@@ -41,9 +66,9 @@ Hitrost: ~6 s na sliko (RGB 1280×1024 + termalna 640×512 + maska).
 |---|---|
 | `rgb/` | normalna slika 1280×1024 |
 | `thermal/` | termalna slika 640×512, 8-bit sivinska (white-hot) |
-| `mask/` | segmentacijska maska vidnega dela želve |
+| `mask/`, `mask_thermal/` | segmentacijska maska vidnega dela želve (RGB / termalna) |
 | `combined/` | RGB + termalna ena ob drugi (za pregled) |
-| `labels/` | YOLO oznaka `0 cx cy w h` (normalizirano – velja za RGB in termalno) |
+| `labels/`, `labels_thermal/` | YOLO oznaka `0 cx cy w h` (normalizirano) za RGB in termalno kamero |
 | `meta/` | JSON: svetovne koordinate želve, kamera, bbox, vsi parametri in temperature |
 | `annotations.csv` | povzetek vseh slik |
 
@@ -83,6 +108,49 @@ Primer predogleda poti: [`primeri/pot_zelve`](primeri/pot_zelve).
 okoli želve in njene sence (Render Region), ki se zmeša na ozadje (samo spremenjeni piksli – brez vidnih robov).
 Rastlinje se pred animacijo "zapeče", maska je v B kanalu termalnega renderja.
 Približno 0,8 s/sličico (polna kvaliteta) oz. 0,45 s/sličico (`--low`).
+
+## Zavihek „Želva" v Blenderju (najlažji način)
+
+Odpri `turtle_meadow.blend` v Blenderju. Ob prvem odprtju Blender pokaže opozorilo o skriptah – klikni
+**Allow Execution** (ali enkrat vklopi *Preferences → Save & Load → Auto Run Python Scripts*).
+Na vrhu se pojavi zavihek **Želva** (poleg Layout, Modeling …): pogled skozi kamero in desno vse nastavitve
+(isti zavihek je tudi v stranski vrstici vsakega 3D pogleda, tipka `N`).
+
+- **Render**: *Ena slika*, *Ena animacija*, *Predogled poti* (N sličic, brez videa), *Paket* (N slik ali
+  animacij z naključnimi semeni), *Nov naključen primer v pogledu* (brez renderja), *Odpri mapo z rezultati*.
+  Seme je naključno ali izbrano.
+- **Kameri**: ločljivost, goriščnica in širina senzorja RGB in termalne kamere, zamik termalne leče.
+  Sproti pokaže vidni kot in ali je kader enak (skupne oznake) ali različen (ločene: `labels/` in `labels_thermal/`).
+- **Želva**: dolžina min/max, največja oddaljenost od kamere, verjetnost ob mlaki, najmanj vidnih pikslov,
+  delež slik brez želve.
+- **Termalno**: za koliko °C je želva toplejša od trave (min/max), temperatura zraka, šum kamere, AGC,
+  ali pride iz vode ohlajena in kako hitro se segreje.
+- **Okolje**: verjetnost oblačnosti, višina sonca, višina trave, gostota 3D šopov.
+- **Animacija**: fps, hitrost želve, postanki, kako daleč od kamere se ustavi, vmesne točke.
+- **Kakovost in izhod**: nizka kakovost (hiter test), vzorci, shranjevanje sličic, mapa za rezultate
+  (privzeto `rezultati/` poleg `.blend`).
+
+Med renderjem zavihek kaže napredek in čas do konca; **Ustavi** (ali Esc) prekine. Render teče v istem
+Blenderju (3D pogled se med tem preklopi v Solid) – vmes ne delaj drugega. Nastavitve se shranijo v `.blend`
+(ne pozabi shraniti) in jih uporabljajo tudi ukazi iz terminala.
+
+Če `turtle_dataset.py` spremeniš ali imaš `.blend` brez zavihka:
+```bash
+blender -b turtle_meadow.blend -P turtle_dataset.py -- --install-ui
+```
+
+## Svoja kamera (premik v Blenderju)
+
+1. Odpri `turtle_meadow.blend`, izberi kamero `TD_Camera` in jo premakni/zasukaj na mesto, kjer boste
+   dejansko snemali (goriščnica in ločljivost sta v zavihku Želva → Kameri). Pogled skozi kamero: `Numpad 0`.
+2. Shrani `.blend` (mapa `lidar/` mora ostati poleg).
+3. Renderiraj kot običajno (`--render`, `--animate`, `--preview`). Skripta zazna, da je kamera premaknjena,
+   in je **ne ponastavi**. Šopi trave se raztrosijo okoli novega kadra, poti želve in naključni položaji
+   se izračunajo za tvojo kamero (cilj je vedno v kadru, 3,5–22 m od kamere). Če kamera ne vidi obale,
+   želva pride iz vode na najbližji obali in prileze v kader.
+4. **Ne poganjaj `--build`**, ker sceno zgradi na novo in kamero vrne na privzeto mesto.
+
+Med animacijo terminal izpiše, katera kamera je uporabljena ter dolžino poti in posnetka.
 
 ## Nastavitve
 
